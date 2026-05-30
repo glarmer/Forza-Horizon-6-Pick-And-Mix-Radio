@@ -478,6 +478,19 @@ public class CheckBoxPanel extends JPanel {
     private void saveChanges(IRadioStation targetStation, List<IRadioStation> selectedStations) {
         try {
             Path backupPath = new RadioInfoEditor(selectedRadioInfoPath).applyPickAndMix(targetStation, selectedStations);
+            try {
+                reloadSelectedRadioInfoFile(targetStation.number());
+            } catch (IOException exception) {
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Saved changes to " + selectedRadioInfoPath.getFileName() + ", but could not reload it.\n"
+                                + exception.getMessage(),
+                        "Reload failed",
+                        JOptionPane.WARNING_MESSAGE
+                );
+                return;
+            }
+
             JOptionPane.showMessageDialog(
                     this,
                     "Saved changes to " + selectedRadioInfoPath.getFileName() + ".\nBackup saved as "
@@ -493,6 +506,26 @@ public class CheckBoxPanel extends JPanel {
                     "Save failed",
                     JOptionPane.ERROR_MESSAGE
             );
+        }
+    }
+
+    private void reloadSelectedRadioInfoFile(int targetStationNumber) throws IOException {
+        List<IRadioStation> radioStations = radioInfoReader.readRadioStations(selectedRadioInfoPath);
+        if (radioStations.isEmpty()) {
+            throw new IOException("The selected file does not contain any radio stations.");
+        }
+
+        populateRadioStations(radioStations);
+        selectTargetStation(targetStationNumber);
+    }
+
+    private void selectTargetStation(int targetStationNumber) {
+        for (int index = 0; index < targetStationDropdown.getItemCount(); index++) {
+            IRadioStation radioStation = targetStationDropdown.getItemAt(index);
+            if (radioStation.number() == targetStationNumber) {
+                targetStationDropdown.setSelectedIndex(index);
+                return;
+            }
         }
     }
 
