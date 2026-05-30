@@ -4,22 +4,25 @@ import javax.swing.*;
 import javax.swing.filechooser.FileFilter;
 import java.awt.BorderLayout;
 import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GridLayout;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class CheckBoxPanel extends JPanel {
     private static final String RADIO_XML_HINT = "Radio XML files are located in `ForzaHorizon6/media/Audio/`";
 
     private final RadioInfoReader radioInfoReader;
-    private final Map<JCheckBox, IRadioStation> stationCheckBoxes;
-    private final JPanel sourceStationPanel;
+    private final List<AdvancedStationSelection> advancedStationSelections;
+    private final JPanel advancedSourceStationPanel;
     private final JLabel selectedFileLabel;
     private final JComboBox<IRadioStation> targetStationDropdown;
     private final JButton submitButton;
@@ -28,8 +31,8 @@ public class CheckBoxPanel extends JPanel {
 
     public CheckBoxPanel() {
         radioInfoReader = new RadioInfoReader();
-        stationCheckBoxes = new LinkedHashMap<>();
-        sourceStationPanel = new JPanel(new GridLayout(0, 1, 5, 5));
+        advancedStationSelections = new ArrayList<>();
+        advancedSourceStationPanel = new JPanel();
         selectedFileLabel = new JLabel("No RadioInfo XML selected");
         targetStationDropdown = new JComboBox<>();
         submitButton = new JButton("Submit");
@@ -56,16 +59,29 @@ public class CheckBoxPanel extends JPanel {
         filePanel.add(browseButton, BorderLayout.EAST);
         filePanel.add(hintLabel, BorderLayout.SOUTH);
 
-        sourceStationPanel.setBorder(BorderFactory.createTitledBorder("Include songs from"));
+        advancedSourceStationPanel.setLayout(new BoxLayout(advancedSourceStationPanel, BoxLayout.Y_AXIS));
+        advancedSourceStationPanel.setBorder(BorderFactory.createTitledBorder("Include individual songs from"));
 
         JPanel targetStationPanel = new JPanel(new BorderLayout(8, 8));
         targetStationPanel.setBorder(BorderFactory.createTitledBorder("Insert songs into"));
         targetStationPanel.add(targetStationDropdown, BorderLayout.CENTER);
         targetStationPanel.add(submitButton, BorderLayout.EAST);
 
+        JScrollPane advancedSourceScrollPane = new JScrollPane(advancedSourceStationPanel);
+        advancedSourceScrollPane.setBorder(BorderFactory.createEmptyBorder());
+        advancedSourceScrollPane.setViewportBorder(null);
+        configureScrollSpeed(advancedSourceScrollPane);
+
         add(filePanel, BorderLayout.NORTH);
-        add(new JScrollPane(sourceStationPanel), BorderLayout.CENTER);
+        add(advancedSourceScrollPane, BorderLayout.CENTER);
         add(targetStationPanel, BorderLayout.SOUTH);
+    }
+
+    private static void configureScrollSpeed(JScrollPane scrollPane) {
+        scrollPane.getVerticalScrollBar().setUnitIncrement(12);
+        scrollPane.getVerticalScrollBar().setBlockIncrement(160);
+        scrollPane.getHorizontalScrollBar().setUnitIncrement(12);
+        scrollPane.getHorizontalScrollBar().setBlockIncrement(160);
     }
 
     private void configureTargetStationDropdown() {
@@ -217,24 +233,32 @@ public class CheckBoxPanel extends JPanel {
         clearRadioStations();
 
         for (IRadioStation radioStation : radioStations) {
-            JCheckBox checkBox = new JCheckBox(radioStation.name());
-            stationCheckBoxes.put(checkBox, radioStation);
-            sourceStationPanel.add(checkBox);
+            addAdvancedStationSelection(radioStation);
             targetStationDropdown.addItem(radioStation);
         }
 
         setStationControlsEnabled(true);
-        sourceStationPanel.revalidate();
-        sourceStationPanel.repaint();
+        refreshSourceStationPanels();
     }
 
     private void clearRadioStations() {
-        stationCheckBoxes.clear();
-        sourceStationPanel.removeAll();
+        advancedStationSelections.clear();
+        advancedSourceStationPanel.removeAll();
         targetStationDropdown.removeAllItems();
         setStationControlsEnabled(false);
-        sourceStationPanel.revalidate();
-        sourceStationPanel.repaint();
+        refreshSourceStationPanels();
+    }
+
+    private void addAdvancedStationSelection(IRadioStation radioStation) {
+        AdvancedStationSelection selection = new AdvancedStationSelection(radioStation);
+        advancedStationSelections.add(selection);
+        advancedSourceStationPanel.add(selection.panel());
+        advancedSourceStationPanel.add(Box.createVerticalStrut(8));
+    }
+
+    private void refreshSourceStationPanels() {
+        advancedSourceStationPanel.revalidate();
+        advancedSourceStationPanel.repaint();
     }
 
     private void setStationControlsEnabled(boolean enabled) {
@@ -272,7 +296,7 @@ public class CheckBoxPanel extends JPanel {
             String message = "Insert " + includedSongCount + " songs into "
                     + targetStation.name()
                     + " from:\n"
-                    + String.join("\n", selectedStations.stream().map(IRadioStation::name).toList());
+                    + String.join("\n", selectedStations.stream().map(this::stationSummary).toList());
 
             int selectedOption = JOptionPane.showOptionDialog(
                     this,
@@ -294,9 +318,10 @@ public class CheckBoxPanel extends JPanel {
     private List<IRadioStation> getSelectedStations() {
         List<IRadioStation> selectedStations = new ArrayList<>();
 
-        for (Map.Entry<JCheckBox, IRadioStation> entry : stationCheckBoxes.entrySet()) {
-            if (entry.getKey().isSelected()) {
-                selectedStations.add(entry.getValue());
+        for (AdvancedStationSelection selection : advancedStationSelections) {
+            IRadioStation selectedStation = selection.selectedStation();
+            if (selectedStation != null) {
+                selectedStations.add(selectedStation);
             }
         }
 
@@ -323,6 +348,131 @@ public class CheckBoxPanel extends JPanel {
                 .filter(sampleList -> sampleList.type() == IRadioStation.SampleListType.TRACK)
                 .mapToInt(sampleList -> sampleList.samples().size())
                 .sum();
+    }
+
+    private String stationSummary(IRadioStation radioStation) {
+        return radioStation.name() + " (" + countSongs(radioStation) + " songs)";
+    }
+
+    private static List<IRadioStation.Sample> trackSamples(IRadioStation radioStation) {
+        return radioStation.sampleLists()
+                .stream()
+                .filter(sampleList -> sampleList.type() == IRadioStation.SampleListType.TRACK)
+                .flatMap(sampleList -> sampleList.samples().stream())
+                .toList();
+    }
+
+    private static String songLabel(IRadioStation.Sample sample) {
+        String displayName = sample.displayName();
+        String artist = sample.artist();
+
+        if (displayName != null && !displayName.isBlank()) {
+            if (artist != null && !artist.isBlank()) {
+                return artist + " - " + displayName;
+            }
+
+            return displayName;
+        }
+
+        return sample.soundName();
+    }
+
+    private static IRadioStation filterStation(
+            IRadioStation radioStation,
+            List<IRadioStation.Sample> selectedTrackSamples
+    ) {
+        Set<String> selectedTrackSoundNames = selectedTrackSoundNames(selectedTrackSamples);
+        Set<String> selectedSongKeys = selectedSongKeys(selectedTrackSamples);
+        List<IRadioStation.SampleList> sampleLists = radioStation.sampleLists()
+                .stream()
+                .map(sampleList -> filterSampleList(sampleList, selectedTrackSoundNames, selectedSongKeys))
+                .toList();
+        List<IRadioStation.PlayList> playLists = radioStation.playLists()
+                .stream()
+                .map(playList -> filterPlayList(playList, selectedTrackSoundNames))
+                .toList();
+
+        return new IRadioStation.RadioStation(
+                radioStation.name(),
+                radioStation.number(),
+                radioStation.djCharId(),
+                radioStation.mediaTrackRestrictions(),
+                radioStation.banks(),
+                sampleLists,
+                playLists
+        );
+    }
+
+    private static Set<String> selectedTrackSoundNames(List<IRadioStation.Sample> selectedTrackSamples) {
+        Set<String> selectedTrackSoundNames = new HashSet<>();
+
+        for (IRadioStation.Sample selectedTrackSample : selectedTrackSamples) {
+            selectedTrackSoundNames.add(selectedTrackSample.soundName());
+        }
+
+        return selectedTrackSoundNames;
+    }
+
+    private static Set<String> selectedSongKeys(List<IRadioStation.Sample> selectedTrackSamples) {
+        Set<String> selectedSongKeys = new HashSet<>();
+
+        for (IRadioStation.Sample selectedTrackSample : selectedTrackSamples) {
+            String songKey = metadataSongKey(selectedTrackSample);
+            if (songKey != null) {
+                selectedSongKeys.add(songKey);
+            }
+        }
+
+        return selectedSongKeys;
+    }
+
+    private static IRadioStation.SampleList filterSampleList(
+            IRadioStation.SampleList sampleList,
+            Set<String> selectedTrackSoundNames,
+            Set<String> selectedSongKeys
+    ) {
+        if (sampleList.type() != IRadioStation.SampleListType.TRACK
+                && sampleList.type() != IRadioStation.SampleListType.TRACK_LFE) {
+            return sampleList;
+        }
+
+        return new IRadioStation.SampleList(
+                sampleList.type(),
+                sampleList.event(),
+                sampleList.samples()
+                        .stream()
+                        .filter(sample -> selectedTrackSoundNames.contains(sample.soundName())
+                                || selectedSongKeys.contains(metadataSongKey(sample)))
+                        .toList()
+        );
+    }
+
+    private static IRadioStation.PlayList filterPlayList(
+            IRadioStation.PlayList playList,
+            Set<String> selectedTrackSoundNames
+    ) {
+        if (playList.type() != IRadioStation.PlayListType.FREE_ROAM
+                && playList.type() != IRadioStation.PlayListType.EVENT) {
+            return playList;
+        }
+
+        return new IRadioStation.PlayList(
+                playList.type(),
+                playList.entries()
+                        .stream()
+                        .filter(entry -> selectedTrackSoundNames.contains(entry.name()))
+                        .toList()
+        );
+    }
+
+    private static String metadataSongKey(IRadioStation.Sample sample) {
+        String displayName = sample.displayName() == null ? "" : sample.displayName();
+        String artist = sample.artist() == null ? "" : sample.artist();
+        if (displayName.isBlank() && artist.isBlank()) {
+            return null;
+        }
+
+        return artist + "\n" + displayName;
     }
 
     private void saveChanges(IRadioStation targetStation, List<IRadioStation> selectedStations) {
@@ -364,5 +514,106 @@ public class CheckBoxPanel extends JPanel {
 
         String fileName = fileNamePath.toString();
         return fileName.startsWith("RadioInfo") && fileName.toLowerCase().endsWith(".xml");
+    }
+
+    private static final class AdvancedStationSelection {
+        private final IRadioStation radioStation;
+        private final JPanel panel;
+        private final JCheckBox stationCheckBox;
+        private final JPanel songPanel;
+        private final JScrollPane songScrollPane;
+        private final JButton toggleSongsButton;
+        private final Map<JCheckBox, IRadioStation.Sample> songCheckBoxes;
+        private boolean updating;
+
+        private AdvancedStationSelection(IRadioStation radioStation) {
+            this.radioStation = radioStation;
+            panel = new JPanel(new BorderLayout(8, 8));
+            stationCheckBox = new JCheckBox(radioStation.name());
+            songPanel = new JPanel(new GridLayout(0, 1, 3, 3));
+            songScrollPane = new JScrollPane(songPanel);
+            toggleSongsButton = new JButton("Show songs");
+            songCheckBoxes = new LinkedHashMap<>();
+
+            buildPanel();
+        }
+
+        private JPanel panel() {
+            return panel;
+        }
+
+        private void buildPanel() {
+            panel.setBorder(BorderFactory.createEtchedBorder());
+            panel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 260));
+
+            JPanel headerPanel = new JPanel(new BorderLayout(8, 8));
+            headerPanel.add(stationCheckBox, BorderLayout.CENTER);
+            headerPanel.add(toggleSongsButton, BorderLayout.EAST);
+
+            List<IRadioStation.Sample> samples = trackSamples(radioStation);
+            stationCheckBox.setText(radioStation.name() + " (" + samples.size() + " songs)");
+            stationCheckBox.addActionListener(event -> setAllSongsSelected(stationCheckBox.isSelected()));
+
+            for (IRadioStation.Sample sample : samples) {
+                JCheckBox songCheckBox = new JCheckBox(songLabel(sample));
+                songCheckBox.addActionListener(event -> updateStationSelectionState());
+                songCheckBoxes.put(songCheckBox, sample);
+                songPanel.add(songCheckBox);
+            }
+
+            songScrollPane.setPreferredSize(new Dimension(600, 160));
+            songScrollPane.setVisible(false);
+            configureScrollSpeed(songScrollPane);
+            toggleSongsButton.addActionListener(event -> toggleSongs());
+
+            panel.add(headerPanel, BorderLayout.NORTH);
+            panel.add(songScrollPane, BorderLayout.CENTER);
+        }
+
+        private void setAllSongsSelected(boolean selected) {
+            if (updating) {
+                return;
+            }
+
+            updating = true;
+            for (JCheckBox songCheckBox : songCheckBoxes.keySet()) {
+                songCheckBox.setSelected(selected);
+            }
+            updating = false;
+        }
+
+        private void updateStationSelectionState() {
+            if (updating) {
+                return;
+            }
+
+            updating = true;
+            stationCheckBox.setSelected(!songCheckBoxes.isEmpty()
+                    && songCheckBoxes.keySet().stream().allMatch(JCheckBox::isSelected));
+            updating = false;
+        }
+
+        private void toggleSongs() {
+            boolean visible = !songScrollPane.isVisible();
+            songScrollPane.setVisible(visible);
+            toggleSongsButton.setText(visible ? "Hide songs" : "Show songs");
+            panel.revalidate();
+        }
+
+        private IRadioStation selectedStation() {
+            List<IRadioStation.Sample> selectedTrackSamples = new ArrayList<>();
+
+            for (Map.Entry<JCheckBox, IRadioStation.Sample> entry : songCheckBoxes.entrySet()) {
+                if (entry.getKey().isSelected()) {
+                    selectedTrackSamples.add(entry.getValue());
+                }
+            }
+
+            if (selectedTrackSamples.isEmpty()) {
+                return null;
+            }
+
+            return filterStation(radioStation, selectedTrackSamples);
+        }
     }
 }

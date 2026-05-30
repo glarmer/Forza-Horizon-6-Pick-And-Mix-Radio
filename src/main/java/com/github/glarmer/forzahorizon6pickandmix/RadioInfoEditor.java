@@ -22,8 +22,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 public class RadioInfoEditor {
@@ -55,13 +57,38 @@ public class RadioInfoEditor {
 
         Document document = readDocument(radioInfoPath);
         Element targetStationElement = findStationElement(document, targetStation);
-        List<Element> sourceStationElements = findStationElements(document, sourceStations);
+        List<Element> sourceStationElements = sourceStationSnapshots(document, sourceStations);
+        Map<Integer, IRadioStation> sourceStationsByNumber = sourceStationsByNumber(sourceStations);
 
         mergeBanks(document, targetStationElement, sourceStationElements);
-        replaceSampleList(document, targetStationElement, sourceStationElements, IRadioStation.SampleListType.TRACK);
-        replaceSampleList(document, targetStationElement, sourceStationElements, IRadioStation.SampleListType.TRACK_LFE);
-        replacePlayList(document, targetStationElement, sourceStationElements, IRadioStation.PlayListType.FREE_ROAM);
-        replacePlayList(document, targetStationElement, sourceStationElements, IRadioStation.PlayListType.EVENT);
+        replaceSampleList(
+                document,
+                targetStationElement,
+                sourceStationElements,
+                sourceStationsByNumber,
+                IRadioStation.SampleListType.TRACK
+        );
+        replaceSampleList(
+                document,
+                targetStationElement,
+                sourceStationElements,
+                sourceStationsByNumber,
+                IRadioStation.SampleListType.TRACK_LFE
+        );
+        replacePlayList(
+                document,
+                targetStationElement,
+                sourceStationElements,
+                sourceStationsByNumber,
+                IRadioStation.PlayListType.FREE_ROAM
+        );
+        replacePlayList(
+                document,
+                targetStationElement,
+                sourceStationElements,
+                sourceStationsByNumber,
+                IRadioStation.PlayListType.EVENT
+        );
 
         writeDocument(document, radioInfoPath);
         return backupPath;
@@ -109,6 +136,16 @@ public class RadioInfoEditor {
         return stationElements;
     }
 
+    private List<Element> sourceStationSnapshots(
+            Document document,
+            List<IRadioStation> sourceStations
+    ) throws IOException {
+        return findStationElements(document, sourceStations)
+                .stream()
+                .map(sourceStationElement -> (Element) sourceStationElement.cloneNode(true))
+                .toList();
+    }
+
     private void mergeBanks(
             Document document,
             Element targetStationElement,
@@ -147,6 +184,7 @@ public class RadioInfoEditor {
             Document document,
             Element targetStationElement,
             List<Element> sourceStationElements,
+            Map<Integer, IRadioStation> sourceStationsByNumber,
             IRadioStation.SampleListType sampleListType
     ) throws IOException {
         Element targetSampleListElement = findSampleListElement(targetStationElement, sampleListType);
@@ -155,10 +193,15 @@ public class RadioInfoEditor {
         Set<String> soundNames = new LinkedHashSet<>();
         for (Element sourceStationElement : sourceStationElements) {
             Element sourceSampleListElement = findSampleListElement(sourceStationElement, sampleListType);
+            Set<String> selectedSoundNames = selectedSoundNames(
+                    sourceStationElement,
+                    sourceStationsByNumber,
+                    sampleListType
+            );
 
             for (Element sampleElement : directChildren(sourceSampleListElement, "Sample")) {
                 String soundName = sampleElement.getAttribute("SoundName");
-                if (soundNames.add(soundName)) {
+                if (selectedSoundNames.contains(soundName) && soundNames.add(soundName)) {
                     targetSampleListElement.appendChild(document.createTextNode("\n        "));
                     targetSampleListElement.appendChild(document.importNode(sampleElement, true));
                 }
@@ -174,6 +217,7 @@ public class RadioInfoEditor {
             Document document,
             Element targetStationElement,
             List<Element> sourceStationElements,
+            Map<Integer, IRadioStation> sourceStationsByNumber,
             IRadioStation.PlayListType playListType
     ) throws IOException {
         Element targetPlayListElement = findPlayListElement(targetStationElement, playListType);
@@ -182,10 +226,15 @@ public class RadioInfoEditor {
         Set<String> entryNames = new LinkedHashSet<>();
         for (Element sourceStationElement : sourceStationElements) {
             Element sourcePlayListElement = findPlayListElement(sourceStationElement, playListType);
+            Set<String> selectedEntryNames = selectedEntryNames(
+                    sourceStationElement,
+                    sourceStationsByNumber,
+                    playListType
+            );
 
             for (Element entryElement : directChildren(sourcePlayListElement, "Entry")) {
                 String entryName = entryElement.getAttribute("Name");
-                if (entryNames.add(entryName)) {
+                if (selectedEntryNames.contains(entryName) && entryNames.add(entryName)) {
                     targetPlayListElement.appendChild(document.createTextNode("\n        "));
                     targetPlayListElement.appendChild(document.importNode(entryElement, true));
                 }
@@ -231,6 +280,67 @@ public class RadioInfoEditor {
                         + playListType.xmlValue()
                         + " playlist."
         );
+    }
+
+    private static Map<Integer, IRadioStation> sourceStationsByNumber(List<IRadioStation> sourceStations) {
+        Map<Integer, IRadioStation> sourceStationsByNumber = new HashMap<>();
+
+        for (IRadioStation sourceStation : sourceStations) {
+            sourceStationsByNumber.put(sourceStation.number(), sourceStation);
+        }
+
+        return sourceStationsByNumber;
+    }
+
+    private static Set<String> selectedSoundNames(
+            Element sourceStationElement,
+            Map<Integer, IRadioStation> sourceStationsByNumber,
+            IRadioStation.SampleListType sampleListType
+    ) {
+        IRadioStation sourceStation = sourceStation(sourceStationElement, sourceStationsByNumber);
+        Set<String> selectedSoundNames = new LinkedHashSet<>();
+
+        for (IRadioStation.SampleList sampleList : sourceStation.sampleLists()) {
+            if (sampleList.type() == sampleListType) {
+                for (IRadioStation.Sample sample : sampleList.samples()) {
+                    selectedSoundNames.add(sample.soundName());
+                }
+            }
+        }
+
+        return selectedSoundNames;
+    }
+
+    private static Set<String> selectedEntryNames(
+            Element sourceStationElement,
+            Map<Integer, IRadioStation> sourceStationsByNumber,
+            IRadioStation.PlayListType playListType
+    ) {
+        IRadioStation sourceStation = sourceStation(sourceStationElement, sourceStationsByNumber);
+        Set<String> selectedEntryNames = new LinkedHashSet<>();
+
+        for (IRadioStation.PlayList playList : sourceStation.playLists()) {
+            if (playList.type() == playListType) {
+                for (IRadioStation.Entry entry : playList.entries()) {
+                    selectedEntryNames.add(entry.name());
+                }
+            }
+        }
+
+        return selectedEntryNames;
+    }
+
+    private static IRadioStation sourceStation(
+            Element sourceStationElement,
+            Map<Integer, IRadioStation> sourceStationsByNumber
+    ) {
+        int stationNumber = Integer.parseInt(sourceStationElement.getAttribute("Number"));
+        IRadioStation sourceStation = sourceStationsByNumber.get(stationNumber);
+        if (sourceStation == null) {
+            throw new IllegalStateException("No selected station data found for station number " + stationNumber + ".");
+        }
+
+        return sourceStation;
     }
 
     private void writeDocument(Document document, Path radioInfoPath) throws IOException {
